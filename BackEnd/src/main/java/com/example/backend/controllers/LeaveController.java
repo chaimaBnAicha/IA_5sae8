@@ -1,13 +1,16 @@
 package com.example.backend.controllers;
 
-
 import com.example.backend.entities.Leave;
 import com.example.backend.entities.LeaveStatus;
 import com.example.backend.entities.LeaveType;
+import com.example.backend.entities.User;
+import com.example.backend.models.LeaveAnalysis;
 import com.example.backend.services.EmailService;
 import com.example.backend.services.ILeaveService;
+import com.example.backend.services.LeaveAIService;
 import lombok.AllArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Date;
@@ -22,9 +25,9 @@ import java.util.Map;
         allowedHeaders = "*")
 public class LeaveController {
 
-
     ILeaveService leaveService;
     private final EmailService emailService;
+    private final LeaveAIService leaveAIService;
 
     @GetMapping("/retrieve-all-leave")
     public List<Leave> getLeaves() {
@@ -34,9 +37,28 @@ public class LeaveController {
 
 
     @PostMapping("/add-leave")
-    public Leave addLeave(@RequestBody Leave l) {
+    public ResponseEntity<?> addLeave(@RequestBody Leave l) {
+        // Analyser la demande avec l'IA
+        LeaveAnalysis analysis = leaveAIService.analyzeLeaveRequest(l);
+        
+        // Mettre à jour la demande avec les résultats de l'analyse
+        l.setAiConfidenceScore(analysis.getConfidenceScore());
+        l.setAiAnalysisResult(analysis.getAnalysisResult());
+        l.setAiRecommendedApproval(analysis.getRecommendedApproval());
+        
+        // Si le score de confiance est trop bas, nous pourrions rejeter automatiquement
+        if (analysis.getConfidenceScore() < 0.3) {
+            l.setStatus(LeaveStatus.Rejected);
+        }
+        
+        // Sauvegarder la demande
         Leave leave = leaveService.addLeave(l);
-        return leave;
+        
+        // Retourner la demande et l'analyse
+        return ResponseEntity.ok(Map.of(
+            "leave", leave,
+            "analysis", analysis
+        ));
     }
     @DeleteMapping("/remove-leave/{leave-id}")
     public void removeLeave(@PathVariable("leave-id") int Id) {
@@ -95,5 +117,75 @@ public class LeaveController {
         return leaveService.getApprovedLeavesByMonth();
     }
 
+    @PostMapping("/analyze-leave")
+    public ResponseEntity<LeaveAnalysis> analyzeLeave(@RequestBody Leave leave) {
+        try {
+            // Set default values if not provided
+            if (leave.getStatus() == null) {
+                leave.setStatus(LeaveStatus.Pending);
+            }
+            
+            // Initialize minimal user data if not provided
+            if (leave.getUser() == null) {
+                User user = new User();
+                user.setId(1);
+                leave.setUser(user);
+            }
+            
+            // Vérification des champs requis
+            if (leave.getStart_date() == null || leave.getEnd_date() == null) {
+                return ResponseEntity.badRequest().body(new LeaveAnalysis(
+                    0.0,
+                    "Start date and end date are required",
+                    false
+                ));
+            }
+            
+            if (leave.getReason() == null || leave.getReason().trim().isEmpty()) {
+                return ResponseEntity.badRequest().body(new LeaveAnalysis(
+                    0.0,
+                    "Reason is required",
+                    false
+                ));
+            }
+            
+            if (leave.getType() == null) {
+                return ResponseEntity.badRequest().body(new LeaveAnalysis(
+                    0.0,
+                    "Leave type is required",
+                    false
+                ));
+            }
+            
+            LeaveAnalysis analysis = leaveAIService.analyzeLeaveRequest(leave);
+            return ResponseEntity.ok(analysis);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(new LeaveAnalysis(
+                0.0,
+                "Error processing request: " + e.getMessage(),
+                false
+            ));
+        }
+    }
 
+    @PutMapping("/update-leave-with-ai")
+    public ResponseEntity<?> updateLeaveWithAI(@PathVariable int id) {
+        Leave leave = leaveService.findLeaveById(id);
+        if (leave == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        LeaveAnalysis analysis = leaveAIService.analyzeLeaveRequest(leave);
+        
+        leave.setAiConfidenceScore(analysis.getConfidenceScore());
+        leave.setAiAnalysisResult(analysis.getAnalysisResult());
+        leave.setAiRecommendedApproval(analysis.getRecommendedApproval());
+        
+        leave = leaveService.updateLeave(leave);
+        
+        return ResponseEntity.ok(Map.of(
+            "leave", leave,
+            "analysis", analysis
+        ));
+    }
 }

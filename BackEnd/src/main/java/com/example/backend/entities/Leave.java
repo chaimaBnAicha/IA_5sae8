@@ -32,4 +32,13 @@ public class Leave {
     @JsonBackReference
     User user;
 
+    // Nouveaux champs pour l'analyse IA
+    @Column(nullable = true)
+    private Double aiConfidenceScore;
+
+    @Column(length = 1000)
+    private String aiAnalysisResult;
+
+    @Column
+    private Boolean aiRecommendedApproval;
 }
